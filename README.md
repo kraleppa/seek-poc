@@ -36,7 +36,8 @@ I used two neural networks from HuggingFace:
 - [microsoft/resnet-50](https://huggingface.co/microsoft/resnet-50)
 - [facebook/convnext-tiny-224](https://huggingface.co/facebook/convnext-tiny-224)
 
-You can find more details in notebooks
+I tried to follow guides from the Bumblebee repository, especially [this one](https://github.com/elixir-nx/bumblebee/blob/main/notebooks/fine_tuning.livemd)
+
 
 
 
