@@ -202,11 +202,11 @@ logits_model
 |> Axon.Loop.run(test_data, trained_model_state, compiler: EXLA)
 ```
 
-```elixir
-trained_model = Map.put(model, :params, trained_model_state)
-```
+As you can see we have 90% accuracy on test data which is quite good. Let's try to this model to the smart cell to play around with it
 
 ```elixir
+trained_model = Map.put(model, :params, trained_model_state)
+
 serving =
   Bumblebee.Vision.image_classification(trained_model, featurizer,
     compile: [batch_size: 1],
@@ -234,3 +234,31 @@ end)
 
 Kino.Layout.grid([form, frame], boxed: true, gap: 16)
 ```
+
+## Conclusions
+
+Overall it seems to be working, but I have few concerns that I have about this expermient
+
+First of all the accuracy on the test model is 90% indeed, but when I did some manual tests it looked the network wasn't certain about their guess
+
+Take a look at the below screenshot. Network calssified this image correctly, but only at the level of 26% which is quite low
+
+![](images/Screenshot%202023-05-05%20at%2013.09.29.png)
+
+I'm also worried about a case when we provide a network some random image that does not include any artifact e.g.
+
+![](images/Screenshot%202023-05-05%20at%2013.13.55.png)
+
+Again, network preditect `lowicz` with 26%
+
+Perhaps we could calculate a diff between the best and 2nd best guess, in case of the first example the difference between `lowicz` and `beksinski` was `0.068`. In the second example the difference was smaller - only `0.013`
+
+I'm quite skeptical about this approach, I think we need to adjust some parameters of training loop to make it more accurate with predictions
+
+<!-- livebook:{"break_markdown":true} -->
+
+
+
+<!-- livebook:{"break_markdown":true} -->
+
+
