@@ -1,0 +1,236 @@
+# Fine-tuning resnet-50
+
+```elixir
+Mix.install(
+  [
+    {:bumblebee, "~> 0.3.0"},
+    {:axon, "~> 0.5.1"},
+    {:nx, "~> 0.5.1"},
+    {:exla, "~> 0.5.1"},
+    {:explorer, "~> 0.5.0"},
+    {:kino_bumblebee, "~> 0.3.0"},
+    {:stb_image, "~> 0.6"}
+  ],
+  config: [nx: [default_backend: EXLA.Backend]]
+)
+```
+
+## Introduction
+
+In this notebook I'll try to fine-tune `renset-50` to my requirements using `Bumblebee` ofc. What are my requirements?
+
+Basically, we have `N` unique artifacts (different objects, like rubber duck, specific plant or something else) and bunch of users that take photos of them.
+
+We need a neural network that'll receive a photo as an input and will determine if one of these artifacts were photographed
+
+So assuming that `N` equals `2` the expected output for given photo may be:
+
+* `artifact-1`
+* `artifact-2`
+* `nil`
+
+## Modify a spec
+
+First of all we have to load a spec of `resnet-50` to check out what's actually going on there
+
+```elixir
+{:ok, spec} = Bumblebee.load_spec({:hf, "microsoft/resnet-50"})
+```
+
+Ok so we have a bunch of stuff here. I think the only interesting keys in this config are `num_labels` and `id_to_label`.
+
+Right now there this network recongizes a wide set of classes. As we can read in the model [documentation](https://huggingface.co/docs/transformers/main/en/model_doc/resnet) it is using _ImageNet_ class list - the url in the docs does not work, but I think this is this [list](https://deeplearning.cms.waikato.ac.nz/user-guide/class-maps/IMAGENET/)
+
+So let's try to create our own labels, let's assume that `N = 5`
+
+```elixir
+id_to_label = %{
+  0 => "beksinski",
+  1 => "lowicz",
+  2 => "duck",
+  3 => "sfi",
+  4 => "lisbon"
+}
+
+spec = Bumblebee.configure(spec, num_labels: 5, id_to_label: id_to_label)
+```
+
+## Load a model
+
+Ok so now we have a tweaked spec of `resnet-50`, now we need to actually load it
+
+If you have no idea what featurizer is (like me), check it this video - it should help
+
+https://www.youtube.com/watch?v=PBzGxFxMCuA&ab_channel=Rasa
+
+```elixir
+{:ok, model} = Bumblebee.load_model({:hf, "microsoft/resnet-50"}, spec: spec)
+{:ok, featurizer} = Bumblebee.load_featurizer({:hf, "microsoft/resnet-50"})
+```
+
+## Prepare a dataset
+
+I've made ~20 photos of each artifact (different lightning, camera angles) for now I assume that objects do not change their position.
+
+Ok so you remember what featurizer is, right? Perfect, because it's time to use it! We'll try to apply the featurizer on the single image now to check what it does
+
+```elixir
+# FYI if you want to run yourself, you'll have to probably change it
+path = "../seek-poc/dataset/1/IMG_3565.jpg"
+{:ok, img} = StbImage.read_file(path)
+```
+
+```elixir
+inputs = Bumblebee.apply_featurizer(featurizer, [img])
+```
+
+It seems to be working. It received an image and returned a tensor which is a bunch of numbers and other different stuff.
+
+So let's load a whole dataset now
+
+```elixir
+defmodule Artifacts do
+  def load(path, featurizer, opts \\ []) do
+    Path.wildcard(path <> "**/*.jpg")
+    |> Enum.map(fn file_path -> load_and_tag(path, file_path) end)
+    |> Enum.shuffle()
+    |> Enum.chunk_every(opts[:batch_size])
+    |> Enum.map(fn batch ->
+      {images, labels} = Enum.unzip(batch)
+      featurized = Bumblebee.apply_featurizer(featurizer, images)
+
+      {featurized, Nx.stack(labels)}
+    end)
+  end
+
+  defp load_file(file_path) do
+    {:ok, file} = StbImage.read_file(file_path)
+
+    file
+  end
+
+  defp load_and_tag(path, file_path) do
+    [tag, _] =
+      file_path
+      |> Path.relative_to(path)
+      |> Path.split()
+
+    {load_file(file_path), String.to_integer(tag)}
+  end
+end
+```
+
+```elixir
+path = "../seek-poc/dataset/"
+
+batches = Artifacts.load(path, featurizer, batch_size: 10)
+```
+
+```elixir
+length(batches)
+```
+
+Ok, now we have some batches ready to train. We'll have to split them to two sets - train and test
+
+```elixir
+{test_data, train_data} = Enum.split(batches, 3)
+
+{length(test_data), length(train_data)}
+```
+
+## Train the model
+
+We need to extract only some parts of a model
+
+```elixir
+%{model: cropped_model, params: params} = model
+
+cropped_model
+```
+
+```elixir
+[{input, _}] = Enum.take(train_data, 1)
+Axon.get_output_shape(cropped_model, input)
+```
+
+```elixir
+logits_model = Axon.nx(cropped_model, & &1.logits)
+```
+
+Now we can construct a training loop. I have no idea what is the proper way of training such neural network so I've copied it from Bumblebee repo and hoping that it'll work in my case
+
+```elixir
+loss =
+  &Axon.Losses.categorical_cross_entropy(&1, &2,
+    reduction: :mean,
+    from_logits: true,
+    sparse: true
+  )
+
+optimizer = Axon.Optimizers.adam(5.0e-5)
+
+loop = Axon.Loop.trainer(logits_model, loss, optimizer, log: 1)
+```
+
+```elixir
+accuracy = &Axon.Metrics.accuracy(&1, &2, from_logits: true, sparse: true)
+
+loop = Axon.Loop.metric(loop, accuracy, "accuracy")
+```
+
+```elixir
+loop = Axon.Loop.checkpoint(loop, event: :epoch_completed)
+```
+
+```elixir
+trained_model_state =
+  logits_model
+  |> Axon.Loop.trainer(loss, optimizer, log: 1)
+  |> Axon.Loop.metric(accuracy, "accuracy")
+  |> Axon.Loop.checkpoint(event: :epoch_completed)
+  |> Axon.Loop.run(train_data, params, epochs: 4, compiler: EXLA, strict?: false)
+
+:ok
+```
+
+## Evaluating the model
+
+```elixir
+logits_model
+|> Axon.Loop.evaluator()
+|> Axon.Loop.metric(accuracy, "accuracy")
+|> Axon.Loop.run(test_data, trained_model_state, compiler: EXLA)
+```
+
+```elixir
+trained_model = Map.put(model, :params, trained_model_state)
+```
+
+```elixir
+serving =
+  Bumblebee.Vision.image_classification(trained_model, featurizer,
+    compile: [batch_size: 1],
+    defn_options: [compiler: EXLA]
+  )
+
+image_input = Kino.Input.image("Image", size: {224, 224})
+form = Kino.Control.form([image: image_input], submit: "Run")
+frame = Kino.Frame.new()
+
+Kino.listen(form, fn %{data: %{image: image}} ->
+  if image do
+    Kino.Frame.render(frame, Kino.Text.new("Running..."))
+
+    image = image.data |> Nx.from_binary(:u8) |> Nx.reshape({image.height, image.width, 3})
+
+    output = Nx.Serving.run(serving, image)
+
+    output.predictions
+    |> Enum.map(&{&1.label, &1.score})
+    |> Kino.Bumblebee.ScoredList.new()
+    |> then(&Kino.Frame.render(frame, &1))
+  end
+end)
+
+Kino.Layout.grid([form, frame], boxed: true, gap: 16)
+```
