@@ -89,11 +89,26 @@ It seems to be working. It received an image and returned a tensor which is a bu
 So let's load a whole dataset now
 
 ```elixir
-defmodule Artifacts do
-  def load(path, featurizer, opts \\ []) do
-    Path.wildcard(path <> "**/*.jpg")
-    |> Enum.map(fn file_path -> load_and_tag(path, file_path) end)
-    |> Enum.shuffle()
+"adasd/1/witam.jpg"
+```
+
+```elixir
+defmodule Dataset do
+  def load_and_split(path, opts \\ []) do
+    {train_data, test_data} =
+      Path.wildcard(path <> "*")
+      |> Enum.map(fn artifact_path ->
+        load_artifact_images(artifact_path, opts[:training_data_size])
+      end)
+      |> Enum.reduce({[], []}, fn {train_data, test_data}, {train_acc, test_acc} ->
+        {train_data ++ train_acc, test_data ++ test_acc}
+      end)
+
+    {Enum.shuffle(train_data), Enum.shuffle(test_data)}
+  end
+
+  def batch(dataset, featurizer, opts \\ []) do
+    dataset
     |> Enum.chunk_every(opts[:batch_size])
     |> Enum.map(fn batch ->
       {images, labels} = Enum.unzip(batch)
@@ -103,19 +118,24 @@ defmodule Artifacts do
     end)
   end
 
-  defp load_file(file_path) do
-    {:ok, file} = StbImage.read_file(file_path)
-
-    file
+  defp load_artifact_images(path, training_data_size) do
+    Path.wildcard(path <> "/*.jpg")
+    |> Enum.map(fn file_path -> load_and_tag(file_path) end)
+    |> Enum.shuffle()
+    |> Enum.split(training_data_size)
   end
 
-  defp load_and_tag(path, file_path) do
-    [tag, _] =
+  defp load_and_tag(file_path) do
+    tag =
       file_path
-      |> Path.relative_to(path)
-      |> Path.split()
+      |> String.split("/")
+      |> Enum.take(-2)
+      |> List.first()
+      |> String.to_integer()
 
-    {load_file(file_path), String.to_integer(tag)}
+    {:ok, file} = StbImage.read_file(file_path)
+
+    {file, tag}
   end
 end
 ```
@@ -123,19 +143,12 @@ end
 ```elixir
 path = "../seek-poc/dataset/"
 
-batches = Artifacts.load(path, featurizer, batch_size: 10)
-```
+{raw_train_data, raw_test_data} = Dataset.load_and_split(path, training_data_size: 20)
 
-```elixir
-length(batches)
-```
+train_data = Dataset.batch(raw_train_data, featurizer, batch_size: 10)
+test_data = Dataset.batch(raw_test_data, featurizer, batch_size: 10)
 
-Ok, now we have some batches ready to train. We'll have to split them to two sets - train and test
-
-```elixir
-{test_data, train_data} = Enum.split(batches, 3)
-
-{length(test_data), length(train_data)}
+{length(train_data), length(test_data)}
 ```
 
 ## Train the model
@@ -167,7 +180,7 @@ loss =
     sparse: true
   )
 
-optimizer = Axon.Optimizers.adam(5.0e-5)
+optimizer = Axon.Optimizers.adam(4.0e-5)
 
 accuracy = &Axon.Metrics.accuracy(&1, &2, from_logits: true, sparse: true)
 
@@ -176,7 +189,7 @@ trained_model_state =
   |> Axon.Loop.trainer(loss, optimizer, log: 1)
   |> Axon.Loop.metric(accuracy, "accuracy")
   |> Axon.Loop.checkpoint(event: :epoch_completed)
-  |> Axon.Loop.run(train_data, params, epochs: 4, compiler: EXLA, strict?: false)
+  |> Axon.Loop.run(train_data, params, epochs: 6, compiler: EXLA, strict?: false)
 
 :ok
 ```
@@ -225,28 +238,4 @@ Kino.Layout.grid([form, frame], boxed: true, gap: 16)
 
 ## Conclusions
 
-Overall it seems to be working, but I have few concerns that I have about this expermient
-
-First of all the accuracy on the test model is quite good, but when I did some manual tests it looked the network wasn't certain about their guess
-
-Take a look at the below screenshot. Network calssified this image correctly, but only at the level of 26% which is quite low
-
-![](images/Screenshot%202023-05-05%20at%2013.09.29.png)
-
-I'm also worried about a case when we provide a network some random image that does not include any artifact e.g.
-
-![](images/Screenshot%202023-05-05%20at%2013.13.55.png)
-
-Again, network preditect `lowicz` with 26%
-
-Perhaps we could calculate a diff between the best and 2nd best guess, in case of the first example the difference between `lowicz` and `beksinski` was `0.068`. In the second example the difference was smaller - only `0.013`
-
-I'm quite skeptical about this approach, I think we need to adjust some parameters of training loop to make it more accurate with predictions
-
-<!-- livebook:{"break_markdown":true} -->
-
-
-
-<!-- livebook:{"break_markdown":true} -->
-
-
+66% accuracy on test dataset

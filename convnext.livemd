@@ -1,0 +1,207 @@
+# Fine-tuning resnet-50
+
+```elixir
+Mix.install(
+  [
+    {:bumblebee, "~> 0.3.0"},
+    {:axon, "~> 0.5.1"},
+    {:nx, "~> 0.5.1"},
+    {:exla, "~> 0.5.1"},
+    {:explorer, "~> 0.5.0"},
+    {:kino_bumblebee, "~> 0.3.0"},
+    {:stb_image, "~> 0.6"}
+  ],
+  config: [nx: [default_backend: EXLA.Backend]]
+)
+```
+
+## Introduction
+
+In this notebook I'll try to fine-tune `renset-50` to my requirements using `Bumblebee` ofc. What are my requirements?
+
+Basically, we have `N` unique artifacts (different objects, like rubber duck, specific plant or something else) and bunch of users that take photos of them.
+
+We need a neural network that'll receive a photo as an input and will determine if one of these artifacts were photographed
+
+So assuming that `N` equals `2` the expected output for given photo may be:
+
+* `artifact-1`
+* `artifact-2`
+* `nil`
+
+## Modify a spec
+
+```elixir
+{:ok, spec} = Bumblebee.load_spec({:hf, "facebook/convnext-tiny-224"})
+```
+
+```elixir
+id_to_label = %{
+  0 => "beksinski",
+  1 => "lowicz",
+  2 => "duck",
+  3 => "sfi",
+  4 => "lisbon"
+}
+
+spec = Bumblebee.configure(spec, num_labels: 5, id_to_label: id_to_label)
+```
+
+## Load a model
+
+```elixir
+{:ok, model} = Bumblebee.load_model({:hf, "facebook/convnext-tiny-224"}, spec: spec)
+{:ok, featurizer} = Bumblebee.load_featurizer({:hf, "facebook/convnext-tiny-224"})
+```
+
+## Prepare a dataset
+
+```elixir
+defmodule Dataset do
+  def load_and_split(path, opts \\ []) do
+    {train_data, test_data} =
+      Path.wildcard(path <> "*")
+      |> Enum.map(fn artifact_path ->
+        load_artifact_images(artifact_path, opts[:training_data_size])
+      end)
+      |> Enum.reduce({[], []}, fn {train_data, test_data}, {train_acc, test_acc} ->
+        {train_data ++ train_acc, test_data ++ test_acc}
+      end)
+
+    {Enum.shuffle(train_data), Enum.shuffle(test_data)}
+  end
+
+  def batch(dataset, featurizer, opts \\ []) do
+    dataset
+    |> Enum.chunk_every(opts[:batch_size])
+    |> Enum.map(fn batch ->
+      {images, labels} = Enum.unzip(batch)
+      featurized = Bumblebee.apply_featurizer(featurizer, images)
+
+      {featurized, Nx.stack(labels)}
+    end)
+  end
+
+  defp load_artifact_images(path, training_data_size) do
+    Path.wildcard(path <> "/*.jpg")
+    |> Enum.map(fn file_path -> load_and_tag(file_path) end)
+    |> Enum.shuffle()
+    |> Enum.split(training_data_size)
+  end
+
+  defp load_and_tag(file_path) do
+    tag =
+      file_path
+      |> String.split("/")
+      |> Enum.take(-2)
+      |> List.first()
+      |> String.to_integer()
+
+    {:ok, file} = StbImage.read_file(file_path)
+
+    {file, tag}
+  end
+end
+```
+
+```elixir
+path = "../seek-poc/dataset/"
+
+{raw_train_data, raw_test_data} = Dataset.load_and_split(path, training_data_size: 20)
+
+train_data = Dataset.batch(raw_train_data, featurizer, batch_size: 10)
+test_data = Dataset.batch(raw_test_data, featurizer, batch_size: 10)
+
+{length(train_data), length(test_data)}
+```
+
+## Train the model
+
+We need to extract only some parts of a model
+
+```elixir
+%{model: cropped_model, params: params} = model
+
+cropped_model
+```
+
+```elixir
+[{input, _}] = Enum.take(train_data, 1)
+Axon.get_output_shape(cropped_model, input)
+```
+
+```elixir
+logits_model = Axon.nx(cropped_model, & &1.logits)
+```
+
+Now we can construct a training loop. I have no idea what is the proper way of training such neural network so I've copied it from Bumblebee repo and hoping that it'll work in my case
+
+```elixir
+loss =
+  &Axon.Losses.categorical_cross_entropy(&1, &2,
+    reduction: :mean,
+    from_logits: true,
+    sparse: true
+  )
+
+optimizer = Axon.Optimizers.adam(5.0e-5)
+
+accuracy = &Axon.Metrics.accuracy(&1, &2, from_logits: true, sparse: true)
+
+trained_model_state =
+  logits_model
+  |> Axon.Loop.trainer(loss, optimizer, log: 1)
+  |> Axon.Loop.metric(accuracy, "accuracy")
+  |> Axon.Loop.checkpoint(event: :epoch_completed)
+  |> Axon.Loop.run(train_data, params, epochs: 4, compiler: EXLA, strict?: false)
+
+:ok
+```
+
+## Evaluating the model
+
+```elixir
+logits_model
+|> Axon.Loop.evaluator()
+|> Axon.Loop.metric(accuracy, "accuracy")
+|> Axon.Loop.run(test_data, trained_model_state, compiler: EXLA)
+```
+
+```elixir
+trained_model = Map.put(model, :params, trained_model_state)
+
+serving =
+  Bumblebee.Vision.image_classification(trained_model, featurizer,
+    compile: [batch_size: 1],
+    defn_options: [compiler: EXLA]
+  )
+
+image_input = Kino.Input.image("Image", size: {224, 224})
+form = Kino.Control.form([image: image_input], submit: "Run")
+frame = Kino.Frame.new()
+
+Kino.listen(form, fn %{data: %{image: image}} ->
+  if image do
+    Kino.Frame.render(frame, Kino.Text.new("Running..."))
+
+    image = image.data |> Nx.from_binary(:u8) |> Nx.reshape({image.height, image.width, 3})
+
+    output = Nx.Serving.run(serving, image)
+
+    output.predictions
+    |> Enum.map(&{&1.label, &1.score})
+    |> Kino.Bumblebee.ScoredList.new()
+    |> then(&Kino.Frame.render(frame, &1))
+  end
+end)
+
+Kino.Layout.grid([form, frame], boxed: true, gap: 16)
+```
+
+## Conclusions
+
+100% accuracy on test data, great results on manual tests
+
+```elixir
+
+```
