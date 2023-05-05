@@ -169,20 +169,8 @@ loss =
 
 optimizer = Axon.Optimizers.adam(5.0e-5)
 
-loop = Axon.Loop.trainer(logits_model, loss, optimizer, log: 1)
-```
-
-```elixir
 accuracy = &Axon.Metrics.accuracy(&1, &2, from_logits: true, sparse: true)
 
-loop = Axon.Loop.metric(loop, accuracy, "accuracy")
-```
-
-```elixir
-loop = Axon.Loop.checkpoint(loop, event: :epoch_completed)
-```
-
-```elixir
 trained_model_state =
   logits_model
   |> Axon.Loop.trainer(loss, optimizer, log: 1)
@@ -202,7 +190,7 @@ logits_model
 |> Axon.Loop.run(test_data, trained_model_state, compiler: EXLA)
 ```
 
-As you can see we have 90% accuracy on test data which is quite good. Let's try to this model to the smart cell to play around with it
+As you can see we have 70% accuracy on test data which is quite good. Let's put this model to the smart cell to play around with it
 
 ```elixir
 trained_model = Map.put(model, :params, trained_model_state)
