@@ -1,4 +1,6 @@
-# Fine-tuning resnet-50
+<!-- livebook:{"persist_outputs":true} -->
+
+# microsoft/resnet-50
 
 ```elixir
 Mix.install(
@@ -15,33 +17,83 @@ Mix.install(
 )
 ```
 
-## Introduction
+<!-- livebook:{"output":true} -->
 
-In this notebook I'll try to fine-tune `renset-50` to my requirements using `Bumblebee` ofc. What are my requirements?
-
-Basically, we have `N` unique artifacts (different objects, like rubber duck, specific plant or something else) and bunch of users that take photos of them.
-
-We need a neural network that'll receive a photo as an input and will determine if one of these artifacts were photographed
-
-So assuming that `N` equals `2` the expected output for given photo may be:
-
-* `artifact-1`
-* `artifact-2`
-* `nil`
+```
+:ok
+```
 
 ## Modify a spec
 
-First of all we have to load a spec of `resnet-50` to check out what's actually going on there
+First of all we have to load a spec of the network to check out what's actually going on there
 
 ```elixir
 {:ok, spec} = Bumblebee.load_spec({:hf, "microsoft/resnet-50"})
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:ok,
+ %Bumblebee.Vision.ResNet{
+   architecture: :for_image_classification,
+   num_channels: 3,
+   embedding_size: 64,
+   hidden_sizes: [256, 512, 1024, 2048],
+   depths: [3, 4, 6, 3],
+   residual_block_type: :bottleneck,
+   activation: :relu,
+   downsample_in_first_stage: false,
+   output_hidden_states: false,
+   num_labels: 1000,
+   id_to_label: %{
+     912 => "worm fence, snake fence, snake-rail fence, Virginia fence",
+     326 => "lycaenid, lycaenid butterfly",
+     33 => "loggerhead, loggerhead turtle, Caretta caretta",
+     289 => "snow leopard, ounce, Panthera uncia",
+     518 => "crash helmet",
+     990 => "buckeye, horse chestnut, conker",
+     456 => "bow",
+     401 => "accordion, piano accordion, squeeze box",
+     168 => "redbone",
+     309 => "bee",
+     117 => "chambered nautilus, pearly nautilus, nautilus",
+     377 => "marmoset",
+     579 => "grand piano, grand",
+     277 => "red fox, Vulpes vulpes",
+     399 => "abaya",
+     413 => "assault rifle, assault gun",
+     477 => "carpenter's kit, tool kit",
+     246 => "Great Dane",
+     704 => "parking meter",
+     175 => "otterhound, otter hound",
+     740 => "power drill",
+     621 => "lawn mower, mower",
+     869 => "trench coat",
+     219 => "cocker spaniel, English cocker spaniel, cocker",
+     923 => "plate",
+     492 => "chest",
+     360 => "otter",
+     669 => "mosquito net",
+     12 => "house finch, linnet, Carpodacus mexicanus",
+     192 => "cairn, cairn terrier",
+     974 => "geyser",
+     311 => "grasshopper, hopper",
+     864 => "tow truck, tow car, wrecker",
+     327 => "starfish, sea star",
+     916 => "web site, website, internet site, site",
+     188 => "wire-haired fox terrier",
+     270 => "white wolf, Arctic wolf, Canis lupus tundrarum",
+     ...
+   }
+ }}
 ```
 
 Ok so we have a bunch of stuff here. I think the only interesting keys in this config are `num_labels` and `id_to_label`.
 
 Right now there this network recongizes a wide set of classes. As we can read in the model [documentation](https://huggingface.co/docs/transformers/main/en/model_doc/resnet) it is using _ImageNet_ class list - the url in the docs does not work, but I think this is this [list](https://deeplearning.cms.waikato.ac.nz/user-guide/class-maps/IMAGENET/)
 
-So let's try to create our own labels, let's assume that `N = 5`
+So let's try to create our own labels
 
 ```elixir
 id_to_label = %{
@@ -55,9 +107,27 @@ id_to_label = %{
 spec = Bumblebee.configure(spec, num_labels: 5, id_to_label: id_to_label)
 ```
 
+<!-- livebook:{"output":true} -->
+
+```
+%Bumblebee.Vision.ResNet{
+  architecture: :for_image_classification,
+  num_channels: 3,
+  embedding_size: 64,
+  hidden_sizes: [256, 512, 1024, 2048],
+  depths: [3, 4, 6, 3],
+  residual_block_type: :bottleneck,
+  activation: :relu,
+  downsample_in_first_stage: false,
+  output_hidden_states: false,
+  num_labels: 5,
+  id_to_label: %{0 => "beksinski", 1 => "lowicz", 2 => "duck", 3 => "sfi", 4 => "lisbon"}
+}
+```
+
 ## Load a model
 
-Ok so now we have a tweaked spec of `resnet-50`, now we need to actually load it
+Ok so now we have a tweaked spec of the network, now we need to actually load it
 
 If you have no idea what featurizer is (like me), check it this video - it should help
 
@@ -68,29 +138,93 @@ https://www.youtube.com/watch?v=PBzGxFxMCuA&ab_channel=Rasa
 {:ok, featurizer} = Bumblebee.load_featurizer({:hf, "microsoft/resnet-50"})
 ```
 
+<!-- livebook:{"output":true} -->
+
+```
+
+01:56:11.216 [debug] the following PyTorch parameters were unused:
+
+  * resnet.embedder.embedder.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.0.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.0.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.0.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.0.shortcut.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.1.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.1.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.1.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.2.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.2.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.0.layers.2.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.0.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.0.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.0.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.0.shortcut.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.1.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.1.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.1.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.2.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.2.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.2.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.3.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.3.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.1.layers.3.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.0.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.0.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.0.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.0.shortcut.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.1.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.1.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.1.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.2.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.2.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.2.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.3.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.3.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.3.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.4.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.4.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.4.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.5.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.5.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.2.layers.5.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.0.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.0.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.0.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.0.shortcut.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.1.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.1.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.1.layer.2.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.2.layer.0.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.2.layer.1.normalization.num_batches_tracked
+  * resnet.encoder.stages.3.layers.2.layer.2.normalization.num_batches_tracked
+
+
+01:56:11.216 [debug] the following parameters were ignored, because of non-matching shape:
+
+  * image_classification_head.output.kernel (expected {2048, 5}, got: {2048, 1000})
+  * image_classification_head.output.bias (expected {5}, got: {1000})
+
+
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:ok,
+ %Bumblebee.Vision.ConvNextFeaturizer{
+   resize: true,
+   size: 224,
+   resize_method: :bicubic,
+   crop_percentage: 0.875,
+   normalize: true,
+   image_mean: [0.485, 0.456, 0.406],
+   image_std: [0.229, 0.224, 0.225]
+ }}
+```
+
 ## Prepare a dataset
 
-I've made ~20 photos of each artifact (different lightning, camera angles) for now I assume that objects do not change their position.
-
-Ok so you remember what featurizer is, right? Perfect, because it's time to use it! We'll try to apply the featurizer on the single image now to check what it does
-
-```elixir
-# FYI if you want to run yourself, you'll have to probably change it
-path = "../seek-poc/dataset/1/IMG_3565.jpg"
-{:ok, img} = StbImage.read_file(path)
-```
-
-```elixir
-inputs = Bumblebee.apply_featurizer(featurizer, [img])
-```
-
-It seems to be working. It received an image and returned a tensor which is a bunch of numbers and other different stuff.
-
-So let's load a whole dataset now
-
-```elixir
-"adasd/1/witam.jpg"
-```
+I've made 26 photos of each artifact (different lightning, camera angles), now we need to load them, split correctly to the data set and train set, featurize them and finally create batches
 
 ```elixir
 defmodule Dataset do
@@ -140,6 +274,12 @@ defmodule Dataset do
 end
 ```
 
+<!-- livebook:{"output":true} -->
+
+```
+{:module, Dataset, <<70, 79, 82, 49, 0, 0, 17, ...>>, {:load_and_tag, 1}}
+```
+
 ```elixir
 path = "../seek-poc/dataset/"
 
@@ -149,6 +289,12 @@ train_data = Dataset.batch(raw_train_data, featurizer, batch_size: 10)
 test_data = Dataset.batch(raw_test_data, featurizer, batch_size: 10)
 
 {length(train_data), length(test_data)}
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{10, 3}
 ```
 
 ## Train the model
@@ -161,16 +307,42 @@ We need to extract only some parts of a model
 cropped_model
 ```
 
+<!-- livebook:{"output":true} -->
+
+```
+#Axon<
+  inputs: %{"pixel_values" => {nil, 224, 224, 3}}
+  outputs: "container_16"
+  nodes: 216
+>
+```
+
 ```elixir
 [{input, _}] = Enum.take(train_data, 1)
 Axon.get_output_shape(cropped_model, input)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+%{hidden_states: #Axon.None<...>, logits: {10, 5}}
 ```
 
 ```elixir
 logits_model = Axon.nx(cropped_model, & &1.logits)
 ```
 
-Now we can construct a training loop. I have no idea what is the proper way of training such neural network so I've copied it from Bumblebee repo and hoping that it'll work in my case
+<!-- livebook:{"output":true} -->
+
+```
+#Axon<
+  inputs: %{"pixel_values" => {nil, 224, 224, 3}}
+  outputs: "nx_0"
+  nodes: 217
+>
+```
+
+Now we can construct a training loop. I have no idea what is the proper way of training such neural network so I've copied it from Bumblebee repo, played around with it and something like this is kind of working
 
 ```elixir
 loss =
@@ -180,7 +352,7 @@ loss =
     sparse: true
   )
 
-optimizer = Axon.Optimizers.adam(4.0e-5)
+optimizer = Axon.Optimizers.adam(5.0e-5)
 
 accuracy = &Axon.Metrics.accuracy(&1, &2, from_logits: true, sparse: true)
 
@@ -189,8 +361,25 @@ trained_model_state =
   |> Axon.Loop.trainer(loss, optimizer, log: 1)
   |> Axon.Loop.metric(accuracy, "accuracy")
   |> Axon.Loop.checkpoint(event: :epoch_completed)
-  |> Axon.Loop.run(train_data, params, epochs: 6, compiler: EXLA, strict?: false)
+  |> Axon.Loop.run(train_data, params, epochs: 4, compiler: EXLA, strict?: false)
 
+:ok
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+
+01:56:13.723 [debug] Forwarding options: [compiler: EXLA] to JIT compiler
+Epoch: 0, Batch: 9, accuracy: 0.2500000 loss: 1.6226499
+Epoch: 1, Batch: 9, accuracy: 0.7200000 loss: 1.5205617
+Epoch: 2, Batch: 9, accuracy: 0.9100000 loss: 1.4374408
+Epoch: 3, Batch: 9, accuracy: 0.9899999 loss: 1.3614454
+```
+
+<!-- livebook:{"output":true} -->
+
+```
 :ok
 ```
 
@@ -203,7 +392,29 @@ logits_model
 |> Axon.Loop.run(test_data, trained_model_state, compiler: EXLA)
 ```
 
-So accuracy on the test data seems to be quite good (~90%). Let's put this model to the smart cell to play around with it
+<!-- livebook:{"output":true} -->
+
+```
+
+01:58:01.877 [debug] Forwarding options: [compiler: EXLA] to JIT compiler
+Batch: 2, accuracy: 0.3666667
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+%{
+  0 => %{
+    "accuracy" => #Nx.Tensor<
+      f32
+      EXLA.Backend<host:0, 0.3439788408.2531655700.181598>
+      0.36666667461395264
+    >
+  }
+}
+```
+
+Let's put this model to the smart cell to play around with it
 
 ```elixir
 trained_model = Map.put(model, :params, trained_model_state)
@@ -235,7 +446,3 @@ end)
 
 Kino.Layout.grid([form, frame], boxed: true, gap: 16)
 ```
-
-## Conclusions
-
-66% accuracy on test dataset
