@@ -190,7 +190,7 @@ logits_model
 |> Axon.Loop.run(test_data, trained_model_state, compiler: EXLA)
 ```
 
-As you can see we have 70% accuracy on test data which is quite good. Let's put this model to the smart cell to play around with it
+So accuracy on the test data seems to be quite good (~90%). Let's put this model to the smart cell to play around with it
 
 ```elixir
 trained_model = Map.put(model, :params, trained_model_state)
@@ -227,7 +227,7 @@ Kino.Layout.grid([form, frame], boxed: true, gap: 16)
 
 Overall it seems to be working, but I have few concerns that I have about this expermient
 
-First of all the accuracy on the test model is 90% indeed, but when I did some manual tests it looked the network wasn't certain about their guess
+First of all the accuracy on the test model is quite good, but when I did some manual tests it looked the network wasn't certain about their guess
 
 Take a look at the below screenshot. Network calssified this image correctly, but only at the level of 26% which is quite low
 
