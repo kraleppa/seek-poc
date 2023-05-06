@@ -1,4 +1,6 @@
-# Fine-tuning resnet-50
+<!-- livebook:{"persist_outputs":true} -->
+
+# facebook/convnext-tiny-224
 
 ```elixir
 Mix.install(
@@ -15,25 +17,83 @@ Mix.install(
 )
 ```
 
-## Introduction
+<!-- livebook:{"output":true} -->
 
-In this notebook I'll try to fine-tune `renset-50` to my requirements using `Bumblebee` ofc. What are my requirements?
-
-Basically, we have `N` unique artifacts (different objects, like rubber duck, specific plant or something else) and bunch of users that take photos of them.
-
-We need a neural network that'll receive a photo as an input and will determine if one of these artifacts were photographed
-
-So assuming that `N` equals `2` the expected output for given photo may be:
-
-* `artifact-1`
-* `artifact-2`
-* `nil`
+```
+:ok
+```
 
 ## Modify a spec
+
+First of all we have to load a spec of the network to check out what's actually going on there
 
 ```elixir
 {:ok, spec} = Bumblebee.load_spec({:hf, "facebook/convnext-tiny-224"})
 ```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:ok,
+ %Bumblebee.Vision.ConvNext{
+   architecture: :for_image_classification,
+   num_channels: 3,
+   patch_size: 4,
+   hidden_sizes: [96, 192, 384, 768],
+   depths: [3, 3, 9, 3],
+   activation: :gelu,
+   scale_initial_value: 1.0e-6,
+   drop_path_rate: 0.0,
+   layer_norm_epsilon: 1.0e-12,
+   initializer_scale: 0.02,
+   output_hidden_states: false,
+   num_labels: 1000,
+   id_to_label: %{
+     912 => "worm fence, snake fence, snake-rail fence, Virginia fence",
+     326 => "lycaenid, lycaenid butterfly",
+     33 => "loggerhead, loggerhead turtle, Caretta caretta",
+     289 => "snow leopard, ounce, Panthera uncia",
+     518 => "crash helmet",
+     990 => "buckeye, horse chestnut, conker",
+     456 => "bow",
+     401 => "accordion, piano accordion, squeeze box",
+     168 => "redbone",
+     309 => "bee",
+     117 => "chambered nautilus, pearly nautilus, nautilus",
+     377 => "marmoset",
+     579 => "grand piano, grand",
+     277 => "red fox, Vulpes vulpes",
+     399 => "abaya",
+     413 => "assault rifle, assault gun",
+     477 => "carpenter's kit, tool kit",
+     246 => "Great Dane",
+     704 => "parking meter",
+     175 => "otterhound, otter hound",
+     740 => "power drill",
+     621 => "lawn mower, mower",
+     869 => "trench coat",
+     219 => "cocker spaniel, English cocker spaniel, cocker",
+     923 => "plate",
+     492 => "chest",
+     360 => "otter",
+     669 => "mosquito net",
+     12 => "house finch, linnet, Carpodacus mexicanus",
+     192 => "cairn, cairn terrier",
+     974 => "geyser",
+     311 => "grasshopper, hopper",
+     864 => "tow truck, tow car, wrecker",
+     327 => "starfish, sea star",
+     916 => "web site, website, internet site, site",
+     ...
+   }
+ }}
+```
+
+Ok so we have a bunch of stuff here. I think the only interesting keys in this config are `num_labels` and `id_to_label`.
+
+Right now there this network recongizes a wide set of classes. As we can read in the model [documentation](https://huggingface.co/docs/transformers/main/en/model_doc/resnet) it is using _ImageNet_ class list - the url in the docs does not work, but I think this is this [list](https://deeplearning.cms.waikato.ac.nz/user-guide/class-maps/IMAGENET/)
+
+So let's try to create our own labels
 
 ```elixir
 id_to_label = %{
@@ -47,14 +107,69 @@ id_to_label = %{
 spec = Bumblebee.configure(spec, num_labels: 5, id_to_label: id_to_label)
 ```
 
+<!-- livebook:{"output":true} -->
+
+```
+%Bumblebee.Vision.ConvNext{
+  architecture: :for_image_classification,
+  num_channels: 3,
+  patch_size: 4,
+  hidden_sizes: [96, 192, 384, 768],
+  depths: [3, 3, 9, 3],
+  activation: :gelu,
+  scale_initial_value: 1.0e-6,
+  drop_path_rate: 0.0,
+  layer_norm_epsilon: 1.0e-12,
+  initializer_scale: 0.02,
+  output_hidden_states: false,
+  num_labels: 5,
+  id_to_label: %{0 => "beksinski", 1 => "lowicz", 2 => "duck", 3 => "sfi", 4 => "lisbon"}
+}
+```
+
 ## Load a model
+
+Ok so now we have a tweaked spec of the network, now we need to actually load it
+
+If you have no idea what featurizer is (like me), check it this video - it should help
+
+https://www.youtube.com/watch?v=PBzGxFxMCuA&ab_channel=Rasa
 
 ```elixir
 {:ok, model} = Bumblebee.load_model({:hf, "facebook/convnext-tiny-224"}, spec: spec)
 {:ok, featurizer} = Bumblebee.load_featurizer({:hf, "facebook/convnext-tiny-224"})
 ```
 
+<!-- livebook:{"output":true} -->
+
+```
+
+02:02:04.361 [debug] the following parameters were ignored, because of non-matching shape:
+
+  * image_classification_head.output.kernel (expected {768, 5}, got: {768, 1000})
+  * image_classification_head.output.bias (expected {5}, got: {1000})
+
+
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{:ok,
+ %Bumblebee.Vision.ConvNextFeaturizer{
+   resize: true,
+   size: 224,
+   resize_method: :bicubic,
+   crop_percentage: 0.875,
+   normalize: true,
+   image_mean: [0.485, 0.456, 0.406],
+   image_std: [0.229, 0.224, 0.225]
+ }}
+```
+
 ## Prepare a dataset
+
+I've made 26 photos of each artifact (different lightning, camera angles), now we need to load them, split correctly to the data set and train set, featurize them and finally create batches
 
 ```elixir
 defmodule Dataset do
@@ -104,6 +219,12 @@ defmodule Dataset do
 end
 ```
 
+<!-- livebook:{"output":true} -->
+
+```
+{:module, Dataset, <<70, 79, 82, 49, 0, 0, 17, ...>>, {:load_and_tag, 1}}
+```
+
 ```elixir
 path = "../seek-poc/dataset/"
 
@@ -113,6 +234,12 @@ train_data = Dataset.batch(raw_train_data, featurizer, batch_size: 10)
 test_data = Dataset.batch(raw_test_data, featurizer, batch_size: 10)
 
 {length(train_data), length(test_data)}
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{10, 3}
 ```
 
 ## Train the model
@@ -125,16 +252,42 @@ We need to extract only some parts of a model
 cropped_model
 ```
 
+<!-- livebook:{"output":true} -->
+
+```
+#Axon<
+  inputs: %{"pixel_values" => {nil, 224, 224, 3}}
+  outputs: "container_18"
+  nodes: 164
+>
+```
+
 ```elixir
 [{input, _}] = Enum.take(train_data, 1)
 Axon.get_output_shape(cropped_model, input)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+%{hidden_states: #Axon.None<...>, logits: {10, 5}}
 ```
 
 ```elixir
 logits_model = Axon.nx(cropped_model, & &1.logits)
 ```
 
-Now we can construct a training loop. I have no idea what is the proper way of training such neural network so I've copied it from Bumblebee repo and hoping that it'll work in my case
+<!-- livebook:{"output":true} -->
+
+```
+#Axon<
+  inputs: %{"pixel_values" => {nil, 224, 224, 3}}
+  outputs: "nx_0"
+  nodes: 165
+>
+```
+
+Now we can construct a training loop. I have no idea what is the proper way of training such neural network so I've copied it from Bumblebee repo, played around with it and something like this is kind of working
 
 ```elixir
 loss =
@@ -158,6 +311,23 @@ trained_model_state =
 :ok
 ```
 
+<!-- livebook:{"output":true} -->
+
+```
+
+02:03:47.695 [debug] Forwarding options: [compiler: EXLA] to JIT compiler
+Epoch: 0, Batch: 9, accuracy: 0.7000000 loss: 1.3583120
+Epoch: 1, Batch: 9, accuracy: 1.0000000 loss: 1.0621382
+Epoch: 2, Batch: 9, accuracy: 1.0000000 loss: 0.8430476
+Epoch: 3, Batch: 9, accuracy: 1.0000000 loss: 0.6820100
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+:ok
+```
+
 ## Evaluating the model
 
 ```elixir
@@ -165,6 +335,28 @@ logits_model
 |> Axon.Loop.evaluator()
 |> Axon.Loop.metric(accuracy, "accuracy")
 |> Axon.Loop.run(test_data, trained_model_state, compiler: EXLA)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+
+02:07:20.117 [debug] Forwarding options: [compiler: EXLA] to JIT compiler
+Batch: 2, accuracy: 1.0000000
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+%{
+  0 => %{
+    "accuracy" => #Nx.Tensor<
+      f32
+      EXLA.Backend<host:0, 0.815276337.2800615443.113429>
+      1.0
+    >
+  }
+}
 ```
 
 ```elixir
@@ -196,12 +388,4 @@ Kino.listen(form, fn %{data: %{image: image}} ->
 end)
 
 Kino.Layout.grid([form, frame], boxed: true, gap: 16)
-```
-
-## Conclusions
-
-100% accuracy on test data, great results on manual tests
-
-```elixir
-
 ```
